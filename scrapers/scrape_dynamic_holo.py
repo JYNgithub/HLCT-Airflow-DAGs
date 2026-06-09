@@ -1,7 +1,8 @@
+import yaml
 from pathlib import Path
+from datetime import timedelta
 from airflow.decorators import dag, task
 from airflow.utils.dates import days_ago
-import yaml
 
 PROJECT = Path(__file__).resolve().parent
 with open(PROJECT.parent / "config.yaml", "r") as f:
@@ -24,7 +25,6 @@ def data_extraction(target_url: str, driver_path: str):
     """
     import logging
     import time
-    import os
     from selenium import webdriver
     from selenium.webdriver.common.by import By
     from selenium.webdriver.chrome.service import Service
@@ -43,11 +43,20 @@ def data_extraction(target_url: str, driver_path: str):
         options.add_argument("--no-sandbox")
         options.add_argument("--disable-dev-shm-usage")
         options.add_argument("--disable-gpu")
-        options.add_argument("--single-process")
-        options.binary_location = os.path.join(driver_path, "chrome-linux64/chrome")
-        
-        service = Service(os.path.join(driver_path, "chromedriver-linux64/chromedriver"))
-        return webdriver.Chrome(service=service, options=options)
+        options.add_argument("--disable-extensions")
+        options.add_argument("--disable-software-rasterizer")
+        options.add_argument("--dns-prefetch-disable")
+        # # For local testing
+        # import os
+        # options.add_argument("--js-flags=--max-old-space-size=1024")
+        # options.binary_location = os.path.join(driver_path, "chrome-linux64/chrome")
+        # service = Service(os.path.join(driver_path, "chromedriver-linux64/chromedriver"))
+        # return webdriver.Chrome(service=service, options=options)
+    
+        return webdriver.Remote(
+        command_executor="http://selenium:4444/wd/hub",
+        options=options
+        )
 
     def get_talent_urls(driver, url):
         """
@@ -133,7 +142,12 @@ def data_extraction(target_url: str, driver_path: str):
             logging.warning(f"Failed to extract info from {url}: {e}")
             return None
 
-    driver = setup_driver()
+    try:
+        driver = setup_driver()
+    except Exception as e:
+        logging.error(f"Failed to connect to Selenium container: {e}")
+        raise
+
     try:
         all_urls = get_talent_urls(driver, target_url)
         data_dynamic_all = []
@@ -298,6 +312,7 @@ def data_loading(data: list, env_path: str):
     start_date=days_ago(0),
     catchup=False,
     tags=["HLCT"],
+    dagrun_timeout=timedelta(minutes=30)
 )
 def main():
     data_dynamic_all = data_extraction(TARGET_URL, DRIVER_PATH)

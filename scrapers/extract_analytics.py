@@ -1,8 +1,8 @@
-import pendulum
+import yaml
 from pathlib import Path
+from datetime import timedelta
 from airflow.decorators import dag, task
 from airflow.utils.dates import days_ago
-import yaml
 
 PROJECT = Path(__file__).resolve().parent
 with open(PROJECT.parent / "config.yaml", "r") as f:
@@ -253,10 +253,11 @@ def data_loading(data: list, env_path: str):
 
 @dag(
     dag_id="HLCT-talent-analytics",
-    schedule="0 0 * * *",
+    schedule="30 16 * * *",
     start_date=days_ago(0),
     catchup=False,
     tags=["HLCT"],
+    dagrun_timeout=timedelta(minutes=30)
 )
 def main():
     data_analytics_all = data_extraction(ENV_PATH)
