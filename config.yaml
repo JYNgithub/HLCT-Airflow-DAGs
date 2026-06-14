@@ -7,8 +7,8 @@ REQUIREMENTS_PATH: "/opt/airflow/dags/project-HLCT/requirements.txt"
 # Path to cached venv
 VENV_CACHE_PATH: "/opt/airflow/venv-cache/project-HLCT"
 
-# Path to Chrome and Chromedriver binaries
-DRIVER_PATH: "/opt/airflow/dags/project-HLCT/deps"
+# URL for Selenium Grid for remote WebDriver
+SELENIUM_URL: "http://selenium:4444/wd/hub"
 
 # Base URL to scrape
 TARGET_URL: "https://hololive.hololivepro.com/en/talents"

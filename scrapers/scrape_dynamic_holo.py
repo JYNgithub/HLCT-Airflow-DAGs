@@ -12,13 +12,13 @@ ENV_PATH = config["ENV_PATH"]
 REQUIREMENTS_PATH = config["REQUIREMENTS_PATH"]
 VENV_CACHE_PATH = config["VENV_CACHE_PATH"]
 TARGET_URL = config["TARGET_URL"]
-DRIVER_PATH = config["DRIVER_PATH"]
+SELENIUM_URL = config["SELENIUM_URL"]
 
 with open(REQUIREMENTS_PATH) as f:
     REQUIREMENTS = f.read().splitlines()
 
 @task.virtualenv(requirements=REQUIREMENTS, venv_cache_path=VENV_CACHE_PATH)
-def data_extraction(target_url: str, driver_path: str):
+def data_extraction(target_url: str, selenium_url: str):
     """
     Setup driver, get talent urls, then scrape static info for each talent.
     Returns a list of dictionaries.
@@ -54,7 +54,7 @@ def data_extraction(target_url: str, driver_path: str):
         # return webdriver.Chrome(service=service, options=options)
     
         return webdriver.Remote(
-        command_executor="http://selenium:4444/wd/hub",
+        command_executor=selenium_url,
         options=options
         )
 
@@ -111,11 +111,6 @@ def data_extraction(target_url: str, driver_path: str):
                 return h1?.childNodes[0]?.textContent.trim();
             """)
 
-            main_image = driver.execute_script("""
-                const img = document.querySelector('#talent_figure figure img');
-                return img?.src || null;
-            """)
-
             schedule_data = driver.execute_script("""
                 const slides = document.querySelectorAll('.talent_program .swiper-slide');
                 if (!slides || slides.length === 0) return {};
@@ -134,7 +129,6 @@ def data_extraction(target_url: str, driver_path: str):
             time.sleep(1.5)
             return {
                 "name": talent_name,
-                "default_image": main_image,
                 **schedule_data
             }
 
@@ -164,7 +158,7 @@ def data_extraction(target_url: str, driver_path: str):
 @task.virtualenv(requirements=REQUIREMENTS, venv_cache_path=VENV_CACHE_PATH)
 def data_preprocessing(data: list, env_path: str):
     """
-    Preprocesses a list of dictionaries to save data as CSV with async translation.
+    Preprocesses a list of dictionaries with async translation.
     Note: Using googletrans==4.0.2 prevents dependency issues, but will need to handle async.
     Args:`
         data: List of dictionaries
@@ -206,7 +200,7 @@ def data_preprocessing(data: list, env_path: str):
         Used in save_to_csv_dynamic at line 'header = sorted(all_keys, key=_sort_columns)'.
         """
 
-        col_order = ["name", "default_image", "datetime", "description", "image", "youtube_link"]
+        col_order = ["name", "datetime", "description", "image", "youtube_link"]
         for i, prefix in enumerate(col_order):
             if key.startswith(prefix):
                 m = re.match(rf"{prefix}(\d*)$", key)
@@ -282,7 +276,7 @@ def data_preprocessing(data: list, env_path: str):
 @task.virtualenv(requirements=REQUIREMENTS, venv_cache_path=VENV_CACHE_PATH)
 def data_loading(data: list, env_path: str):
     """
-    Load CSV into database
+    Load data into database
     """
     import os
     import logging
@@ -315,7 +309,7 @@ def data_loading(data: list, env_path: str):
     dagrun_timeout=timedelta(minutes=30)
 )
 def main():
-    data_dynamic_all = data_extraction(TARGET_URL, DRIVER_PATH)
+    data_dynamic_all = data_extraction(TARGET_URL, SELENIUM_URL)
     data = data_preprocessing(data_dynamic_all, ENV_PATH)
     data_loading(data, ENV_PATH)
 

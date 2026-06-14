@@ -12,19 +12,21 @@ ENV_PATH = config["ENV_PATH"]
 REQUIREMENTS_PATH = config["REQUIREMENTS_PATH"]
 VENV_CACHE_PATH = config["VENV_CACHE_PATH"]
 TARGET_URL = config["TARGET_URL"]
-DRIVER_PATH = config["DRIVER_PATH"]
+SELENIUM_URL = config["SELENIUM_URL"]
 
 with open(REQUIREMENTS_PATH) as f:
     REQUIREMENTS = f.read().splitlines()
 
 @task.virtualenv(requirements=REQUIREMENTS, venv_cache_path=VENV_CACHE_PATH)
-def data_extraction(target_url: str, driver_path: str):
+def data_extraction(target_url: str, selenium_url: str):
     """
     Setup driver, get talent urls, then scrape static info for each talent.
     Returns a list of dictionaries.
     """
     import logging
     import time
+    import urllib.parse
+    import os
     from selenium import webdriver
     from selenium.webdriver.common.by import By
     from selenium.webdriver.chrome.service import Service
@@ -51,7 +53,7 @@ def data_extraction(target_url: str, driver_path: str):
         # return webdriver.Chrome(service=service, options=options)
     
         return webdriver.Remote(
-        command_executor="http://selenium:4444/wd/hub",
+        command_executor=selenium_url,
         options=options
         )
 
@@ -110,6 +112,13 @@ def data_extraction(target_url: str, driver_path: str):
                 return h1?.childNodes[0]?.textContent.trim();
             """)
 
+            # Extract main image URL and filename
+            main_image_url = driver.execute_script("""
+                const img = document.querySelector('#talent_figure figure img');
+                return img?.src || null;
+            """)
+            main_image_filename = os.path.basename(urllib.parse.urlparse(main_image_url).path) if main_image_url else None
+
             # Extract information from the dd elements
             talent_info = driver.execute_script("""
                 function scrape(labelText) {
@@ -128,9 +137,11 @@ def data_extraction(target_url: str, driver_path: str):
                 };
             """)
 
-            time.sleep(1.5)  # Best practice
+            time.sleep(1.5)
             return {
                 "name": talent_name,
+                "default_image": main_image_filename,
+                "default_image_url": main_image_url,
                 **talent_info,
                 "url": url
             }
@@ -159,6 +170,9 @@ def data_extraction(target_url: str, driver_path: str):
 
 @task.virtualenv(requirements=REQUIREMENTS, venv_cache_path=VENV_CACHE_PATH)
 def data_preprocessing(data: list, env_path: str):
+    """
+    Basic text cleaning and preprocessing of the extracted data
+    """
     import os
     import logging
     import html as html_lib
@@ -212,8 +226,13 @@ def data_preprocessing(data: list, env_path: str):
 
 @task.virtualenv(requirements=REQUIREMENTS, venv_cache_path=VENV_CACHE_PATH)
 def data_loading(data: list, env_path: str):
+    """
+    Load data into database and upload images to R2
+    """
     import os
     import logging
+    import requests
+    import boto3
     import pandas as pd
     from dotenv import load_dotenv
     from sqlalchemy import create_engine
@@ -222,14 +241,42 @@ def data_loading(data: list, env_path: str):
 
     load_dotenv(env_path)
     db_url = os.getenv("DB_URL")
+    r2_endpoint = os.getenv("R2_ENDPOINT")
+    r2_access_key = os.getenv("R2_ACCESS_KEY")
+    r2_secret_key = os.getenv("R2_SECRET_KEY")
+    r2_bucket = os.getenv("R2_BUCKET")
 
     if not db_url:
         raise ValueError(f"DB_URL not set in {env_path}")
-
     if not data:
         logging.warning("No data to load.")
         return
 
+    s3 = boto3.client(
+        "s3",
+        endpoint_url=r2_endpoint,
+        aws_access_key_id=r2_access_key,
+        aws_secret_access_key=r2_secret_key,
+        region_name="auto"
+    )
+
+    for item in data:
+        image_url = item.get("default_image_url", None)
+        filename = item.get("default_image")
+        if image_url and filename:
+            try:
+                resp = requests.get(image_url, timeout=10)
+                resp.raise_for_status()
+                s3.put_object(
+                    Bucket=r2_bucket,
+                    Key=filename,
+                    Body=resp.content,
+                    ContentType=resp.headers.get("Content-Type", "image/png")
+                )
+                logging.info(f"Uploaded {filename} to R2.")
+            except Exception as e:
+                logging.warning(f"Failed to upload {filename}: {e}")
+    
     engine = create_engine(db_url)
     df = pd.DataFrame(data)
     df.to_sql("talent_info", engine, schema="hololive", if_exists="replace", index=False)
@@ -243,7 +290,7 @@ def data_loading(data: list, env_path: str):
     dagrun_timeout=timedelta(minutes=30)
 )
 def main():
-    data_static_all = data_extraction(TARGET_URL, DRIVER_PATH)
+    data_static_all = data_extraction(TARGET_URL, SELENIUM_URL)
     data = data_preprocessing(data_static_all, ENV_PATH)
     data_loading(data, ENV_PATH)
 
