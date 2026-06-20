@@ -18,7 +18,7 @@ with open(REQUIREMENTS_PATH) as f:
     REQUIREMENTS = f.read().splitlines()
 
 @task.virtualenv(requirements=REQUIREMENTS, venv_cache_path=VENV_CACHE_PATH)
-def data_extraction(target_url: str, selenium_url: str):
+def data_extraction(target_url: str, selenium_url: str, retry_num: int, retry_delay: int):
     """
     Setup driver, get talent urls, then scrape static info for each talent.
     Returns a list of dictionaries.
@@ -136,11 +136,17 @@ def data_extraction(target_url: str, selenium_url: str):
             logging.warning(f"Failed to extract info from {url}: {e}")
             return None
 
-    try:
-        driver = setup_driver()
-    except Exception as e:
-        logging.error(f"Failed to connect to Selenium container: {e}")
-        raise
+    driver = None
+    for attempt in range(retry_num):
+        try:
+            driver = setup_driver()
+            break
+        except Exception as e:
+            logging.warning(f"Selenium connection attempt {attempt + 1} failed: {e}")
+            if attempt == retry_num - 1:
+                logging.error("Max retries reached. Giving up.")
+                raise
+            time.sleep(retry_delay)
 
     try:
         all_urls = get_talent_urls(driver, target_url)
@@ -153,7 +159,11 @@ def data_extraction(target_url: str, selenium_url: str):
         logging.info(f"Successfully extracted {len(data_dynamic_all)} talents.")
         return data_dynamic_all
     finally:
-        driver.quit()
+        if driver:
+            try:
+                driver.quit()
+            except Exception:
+                pass
 
 @task.virtualenv(requirements=REQUIREMENTS, venv_cache_path=VENV_CACHE_PATH)
 def data_preprocessing(data: list, env_path: str):
@@ -309,7 +319,7 @@ def data_loading(data: list, env_path: str):
     dagrun_timeout=timedelta(minutes=30)
 )
 def main():
-    data_dynamic_all = data_extraction(TARGET_URL, SELENIUM_URL)
+    data_dynamic_all = data_extraction(TARGET_URL, SELENIUM_URL, retry_num=3, retry_delay=15)
     data = data_preprocessing(data_dynamic_all, ENV_PATH)
     data_loading(data, ENV_PATH)
 
